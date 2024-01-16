@@ -41,6 +41,8 @@ Use the following commands to navigate:
 - `py-reverse-advance-function` (`pyra`) to continue backwards until the previous Python function call
 - `py-last-attr` (`pyla`) to search backwards or forwards until an object attribute is assigned
 
+The `py-step` and `py-reverse-step` commands take an optional argument specifying the Python bytecode opcode to step until.
+
 The `py-advance-function` and `py-reverse-advance-function` commands take an optional argument specifying which function to advance to.
 
 The `py-last-attr` command takes an optional argument to specify which attribute name to search for.

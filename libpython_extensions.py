@@ -13,9 +13,12 @@ import libpython
 gdb.execute("alias -a pp = py-print")
 
 
-def check_python_version():
+def check_python_bytecode_version():
     """
-    Warn if the inferior's Python version does not match the debugger's Python version.
+    Warn if the inferior's Python version does not match the debugger's Python version, with
+    respect to bytecode.
+
+    Bytecode should be stable for minor versions.
     """
     inferior_version = gdb.parse_and_eval("PY_VERSION").string()
     debugger_version = ".".join(
@@ -39,7 +42,7 @@ class PyDisassemble(gdb.Command):
         gdb.Command.__init__(self, "py-dis", gdb.COMMAND_STACK, gdb.COMPLETE_NONE)
 
     def invoke(self, args, from_tty):
-        check_python_version()
+        check_python_bytecode_version()
 
         frame = libpython.Frame.get_selected_bytecode_frame()
         if not frame:
@@ -205,9 +208,30 @@ def get_c_source_location(basename: str, content: str) -> str:
     raise ValueError(f"Failed to find {content=} in {basename=}")
 
 
-def python_step_bytecode(*, forwards: bool) -> None:
+def get_opcode_number(opcode: str) -> int:
+    """
+    Translate opcode string to opcode number.
+    """
+    check_python_bytecode_version()
+    try:
+        return dis.opmap[opcode]
+    except KeyError:
+        pass
+    try:
+        opcode_number = int(opcode)
+        if opcode_number in dis.opmap.values():
+            return opcode_number
+    except ValueError:
+        pass
+    show_opcodes = "pi import dis; dis.opmap"
+    raise gdb.GdbError(f"Invalid opcode {opcode!r}. Run `{show_opcodes}` to see valid opcodes.")
+
+
+def python_step_bytecode(*, forwards: bool, opcode: str | None) -> None:
     """
     Continue the program forwards or backwards until the next Python bytecode.
+
+    Accepts an optional target opcode.
     """
     if getattr(python_step_bytecode, "location", None) is None:
         try:
@@ -221,24 +245,36 @@ def python_step_bytecode(*, forwards: bool) -> None:
             )
 
     with debugger_utils.breakpoints_suspended():
-        bp = gdb.Breakpoint(python_step_bytecode.location, internal=True)
-        bp.silent = True
         try:
+            bp: gdb.Breakpoint | ConditionalBreakpoint | None = None
+            if opcode:
+                opcode_number = get_opcode_number(opcode)
+                bp = ConditionalBreakpoint(
+                    python_step_bytecode.location,
+                    internal=True,
+                    predicate=lambda: gdb.selected_frame().read_var("opcode") == opcode_number,
+                )
+            else:
+                bp = gdb.Breakpoint(python_step_bytecode.location, internal=True)
+            bp.silent = True
             gdb.execute("continue" if forwards else "reverse-continue")
         finally:
-            bp.delete()
+            if bp is not None:
+                bp.delete()
 
 
 class PythonStep(gdb.Command):
     """
     Continue the program forwards until the next Python bytecode.
+
+    A specific opcode can be given as an optional argument.
     """
 
     def __init__(self):
         super().__init__("py-step", gdb.COMMAND_RUNNING)
 
     def invoke(self, arg, from_tty):
-        python_step_bytecode(forwards=True)
+        python_step_bytecode(forwards=True, opcode=arg)
 
 
 PythonStep()
@@ -248,13 +284,15 @@ gdb.execute("alias -a pys = py-step")
 class PythonReverseStep(gdb.Command):
     """
     Continue the program backwards until the next Python bytecode.
+
+    A specific opcode can be given as an optional argument.
     """
 
     def __init__(self):
         super().__init__("py-reverse-step", gdb.COMMAND_RUNNING)
 
     def invoke(self, arg, from_tty):
-        python_step_bytecode(forwards=False)
+        python_step_bytecode(forwards=False, opcode=arg)
 
 
 PythonReverseStep()
