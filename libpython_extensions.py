@@ -200,6 +200,7 @@ PythonReverseAdvanceFunction()
 gdb.execute("alias -a pyra = py-reverse-advance")
 
 
+@functools.cache
 def get_c_source_location(basename: str, content: str) -> str:
     """
     Return linespec for a file matching the given basename and line matching the given content.
@@ -234,7 +235,9 @@ def get_opcode_number(opcode: str) -> int:
     except ValueError:
         pass
     show_opcodes = "pi import dis; dis.opmap"
-    raise gdb.GdbError(f"Invalid opcode {opcode!r}. Run `{show_opcodes}` to see valid opcodes.")
+    raise gdb.GdbError(
+        f"Invalid opcode {opcode!r}. Run `{show_opcodes}` to see valid opcodes."
+    )
 
 
 def python_step_bytecode(*, forwards: bool, opcode: str | None) -> None:
@@ -243,29 +246,19 @@ def python_step_bytecode(*, forwards: bool, opcode: str | None) -> None:
 
     Accepts an optional target opcode.
     """
-    if getattr(python_step_bytecode, "location", None) is None:
-        try:
-            basename = "ceval.c"
-            python_step_bytecode.location = get_c_source_location(
-                basename, "dispatch_opcode:"
-            )
-        except ValueError:
-            raise gdb.GdbError(
-                f"Failed to find Python bytecode interpreter loop in {basename}"
-            )
-
+    try:
+        basename = "ceval.c"
+        location = get_c_source_location(basename, "dispatch_opcode:")
+    except ValueError:
+        raise gdb.GdbError(
+            f"Failed to find Python bytecode interpreter loop in {basename}"
+        )
     with debugger_utils.breakpoints_suspended():
         try:
-            bp: gdb.Breakpoint | ConditionalBreakpoint | None = None
+            bp = gdb.Breakpoint(location, internal=True)
             if opcode:
                 opcode_number = get_opcode_number(opcode)
-                bp = ConditionalBreakpoint(
-                    python_step_bytecode.location,
-                    internal=True,
-                    predicate=lambda: gdb.selected_frame().read_var("opcode") == opcode_number,
-                )
-            else:
-                bp = gdb.Breakpoint(python_step_bytecode.location, internal=True)
+                bp.condition = f"opcode == {opcode_number}"
             bp.silent = True
             gdb.execute("continue" if forwards else "reverse-continue")
         finally:
