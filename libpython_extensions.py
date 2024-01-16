@@ -1,4 +1,5 @@
 import dis
+import os
 import pathlib
 import sys
 from typing import Optional
@@ -258,3 +259,55 @@ class PythonReverseStep(gdb.Command):
 PythonReverseStep()
 gdb.execute("alias -a pyrs = py-reverse-step")
 gdb.execute("alias -a py-rstep = py-reverse-step")
+
+
+class PythonSubstitutePath(gdb.Command):
+    """
+    Define path substitutions for Python files.
+
+    When given zero arguments, prints the current substitutions.
+    When given "clear" as the argument, removes current substitutions.
+    When given two arguments "original" and "substitution", installs a new substitution rule.
+    """
+
+    substitutions: list[tuple[str, str]] = []
+
+    def __init__(self):
+        super().__init__("py-substitute-path", gdb.COMMAND_FILES)
+
+    def invoke(self, arg, from_tty):
+        if not arg:
+            print("The current substitutions are:")
+            for original, substitution in self.substitutions:
+                print(f"  {original} -> {substitution}")
+            return
+
+        if arg == "clear":
+            self.substitutions.clear()
+            print("All substitutions have been removed.")
+            return
+
+        try:
+            original, substitution = gdb.string_to_argv(arg)
+        except ValueError:
+            raise ValueError(
+                "This command expects two arguments: original path and substitution path."
+            )
+        self.substitutions.append((original, substitution))
+
+    @classmethod
+    def open(cls, path_bytes: bytes, *args):
+        """
+        Wrapper for the "open" function, substituing paths defined by py-substitute-path
+        """
+        path = os.fsdecode(path_bytes)
+        for original, substitution in cls.substitutions:
+            if original in path:
+                path = path.replace(original, substitution)
+                break
+        return open(os.fsencode(path), *args)
+
+
+PythonSubstitutePath()
+# Define a customised open implementation in the libpython module to substitute filename paths.
+setattr(libpython, "open", PythonSubstitutePath.open)
