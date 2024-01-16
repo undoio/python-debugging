@@ -1,4 +1,5 @@
 import dis
+import functools
 import os
 import pathlib
 import sys
@@ -13,17 +14,26 @@ import libpython
 gdb.execute("alias -a pp = py-print")
 
 
-def check_python_bytecode_version():
+@functools.cache
+def get_python_versions() -> tuple[str, str]:
     """
-    Warn if the inferior's Python version does not match the debugger's Python version, with
-    respect to bytecode.
-
-    Bytecode should be stable for minor versions.
+    Get the inferior and the debugger Python versions.
     """
     inferior_version = gdb.parse_and_eval("PY_VERSION").string()
     debugger_version = ".".join(
         map(str, (sys.version_info.major, sys.version_info.minor))
     )
+    return inferior_version, debugger_version
+
+
+def check_python_bytecode_version() -> None:
+    """
+    Warn if the inferior's Python version is not compatible with the debugger's Python version,
+    with respect to bytecode.
+
+    Bytecode should be stable for minor versions.
+    """
+    inferior_version, debugger_version = get_python_versions()
     if not inferior_version.startswith(debugger_version):
         print(
             f"Warning: Mismatched Python version between "
