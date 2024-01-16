@@ -5,6 +5,7 @@ import sys
 from typing import Optional
 
 import gdb
+from src.udbpy.gdb_extensions import command
 from undodb.debugger_extensions import debugger_utils
 
 import libpython
@@ -259,6 +260,93 @@ class PythonReverseStep(gdb.Command):
 PythonReverseStep()
 gdb.execute("alias -a pyrs = py-reverse-step")
 gdb.execute("alias -a py-rstep = py-reverse-step")
+
+
+class PythonLastAttribute(gdb.Command):
+    """
+    Find the last time a Python object's attribute was assigned.
+
+    The first argument is the name of the Python object and is mandatory.
+    The second argument is the name of the attribute and is optional. If no second argument is
+    given, we search for assignment to any attribute.
+
+    Add the "-f" option to search forwards instead of backwards.
+
+    If the command is repeated, the previous search is resumed.
+    """
+
+    _repeat_detection = command._RepeatDetection()
+
+    object_addr: int | None = None
+    attribute_name: str | None = None
+    backwards: bool = True
+
+    def __init__(self):
+        super().__init__("py-last-attr", gdb.COMMAND_RUNNING)
+
+    def invoke(self, arg, from_tty):
+        is_repeated = self._repeat_detection.handle_command()
+        if not is_repeated:
+            args = gdb.string_to_argv(arg)
+            self.backwards = True
+            if "-f" in args:
+                args.remove("-f")
+                self.backwards = False
+            object_name, *args = args
+            self.attribute_name = None
+            if args:
+                self.attribute_name, *_ = args
+
+            frame = libpython.Frame.get_selected_python_frame()
+            if not frame:
+                print("Unable to locate python frame")
+                return
+            pyop_frame = frame.get_pyop()
+            if not pyop_frame:
+                print(libpython.UNABLE_READ_INFO_PYTHON_FRAME)
+                return
+            pyop_var, scope = pyop_frame.get_var_by_name(object_name)
+            if not pyop_var:
+                print("No such Python object")
+                return
+            self.object_addr = pyop_var.as_address()
+            print(
+                "".join(
+                    [
+                        f"Searching ",
+                        "backwards " if self.backwards else "forwards ",
+                        "for changes to ",
+                        f"attribute {self.attribute_name} in "
+                        if self.attribute_name
+                        else "",
+                        f"{scope} {object_name} object.",
+                    ]
+                )
+            )
+
+        def predicate():
+            frame = gdb.selected_frame()
+            if frame.read_var("v") != self.object_addr:
+                return False
+            if self.attribute_name:
+                name_ptr = gdb.selected_frame().read_var("name")
+                name = libpython.PyObjectPtr.from_pyobject_ptr(name_ptr).proxyval(set())
+                return name == self.attribute_name
+            return True
+
+        with debugger_utils.breakpoints_suspended():
+            bp = ConditionalBreakpoint(
+                "PyObject_SetAttr", internal=True, predicate=predicate
+            )
+            bp.silent = True
+            try:
+                gdb.execute("reverse-continue" if self.backwards else "continue")
+            finally:
+                bp.delete()
+
+
+PythonLastAttribute()
+gdb.execute("alias -a pyla = py-last-attr")
 
 
 class PythonSubstitutePath(gdb.Command):
