@@ -440,3 +440,44 @@ class PythonSubstitutePath(gdb.Command):
 PythonSubstitutePath()
 # Define a customised open implementation in the libpython module to substitute filename paths.
 setattr(libpython, "open", PythonSubstitutePath.open)
+
+
+class PyEval(gdb.Command):
+    """
+    Evaluate a Python expression in the context of the inferior Python process at the currently
+    selected Python frame.
+    """
+
+    def __init__(self):
+        super().__init__("py-eval", gdb.COMMAND_RUNNING)
+
+    def invoke(self, arg, from_tty):
+        eval_expression = arg.replace("\"", "\\\"")
+        try:
+            # First, find the frame of the currently selected Python frame. We need this to find the
+            # correct locals and globals. The PyEval_GetLocals and PyEval_GetGlobals functions are
+            # available but these provide the environment of the currently executing frame, not the
+            # selected frame.
+            frame_pointer = int(libpython.Frame.get_selected_python_frame().get_pyop()._gdbval)
+        except AttributeError:
+            print("Unable to locate python frame")
+            return
+        frame_var = "$_python_frame"
+        frame_expr = f"((struct _frame *){frame_var})"
+        # Set the frame
+        gdb.execute(f"set {frame_var}={frame_pointer}")
+        run_arguments = [
+            f'"{eval_expression}"',
+            # Py_eval_input
+            "258",
+            f"{frame_expr}->f_globals",
+            # PyFrame_FastToLocalsWithError must be called to populate the locals object in the
+            # frame. We use the comma operator to let us do this in the same inferior call as
+            # PyRun_String.
+            f"(PyFrame_FastToLocalsWithError({frame_var}), {frame_expr}->f_locals)",
+        ]
+        run_command = f"p PyRun_String({', '.join(run_arguments)})"
+        gdb.execute(run_command, from_tty=True)
+
+PyEval()
+gdb.execute("alias -a pe = py-eval")
