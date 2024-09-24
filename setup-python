@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Ensure that pyenv is installed
+
+PYENV_ROOT="$HOME/.local/share/undo/pyenv"
+if [ ! -d "$PYENV_ROOT" ]; then
+    echo "Installing pyenv"
+    git clone https://github.com/pyenv/pyenv.git "$PYENV_ROOT"
+fi
+
+# Ensure an appropriate Python version is installed
+
+PY_VERSION="3.10.15"
+# For optimal debug information we set `-g3 -Og`.
+CONFIGURE_OPTS="--with-computed-gotos=no" \
+PYTHON_CFLAGS="-g3 -Og" \
+             $PYENV_ROOT/bin/pyenv install \
+             --keep \
+             --verbose \
+             --skip-existing \
+             $PY_VERSION
+
+
+# Make the python version available in the current shell
+export PATH="$PYENV_ROOT/versions/$PY_VERSION/bin:$PATH"

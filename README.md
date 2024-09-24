@@ -21,14 +21,22 @@ and start UDB while sourcing the `libpython.gdb` file from the same directory
 $ udb --ex "source ./libpython.gdb"
 ```
 
-The version of the `libpython.py` library must generally match the version of Python you want to
-debug. These extensions are built around the 3.10 version of the `libpython.py` library.
+The supported version of Python is currently cpython 3.10. The interpreter must have been compiled with full debug information (`-g3`) and without cpython's "computed gotos" feature.
+
+You can use the `./setup-python` script to install a suitable version of Python with `pyenv`:
+
+```
+$ source ./setup-python
+$ python --version
+Python 3.10.15
+```
 
 ### Usage
 
 Use the following commands to inspect Python state:
 
 - `py-print` (`pp`) to print Python objects
+- `py-eval` (`pe`) to evaluate Python expressions
 - `py-list` to list Python source code
 - `py-bt` to show Python backtrace
 - `py-locals` to show local Python variables
@@ -50,7 +58,7 @@ The `py-last-attr` command takes an optional argument to specify which attribute
 
 ---
 
-Switch to the Python layout in TUI mode to get a better overview of your program. This layout automatically shows the output from `py-list`, `py-dis`, `py-locals` and `py-bt`:
+Switch to the Python layout in TUI mode to get a better overview of your program.
 
 ```
 > layout python
