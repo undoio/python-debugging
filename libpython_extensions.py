@@ -35,11 +35,18 @@ def check_python_bytecode_version() -> None:
     """
     inferior_version, debugger_version = get_python_versions()
     if not inferior_version.startswith(debugger_version):
-        print(
+        raise gdb.GdbError(
             f"Warning: Mismatched Python version between "
             f"inferior ({inferior_version}) and "
             f"debugger ({debugger_version}). "
             f"The bytecode shown might be wrong."
+        )
+
+    use_computed_gotos = int(gdb.parse_and_eval("USE_COMPUTED_GOTOS"))
+    if use_computed_gotos:
+        raise gdb.GdbError(
+            "Warning: The inferior Python was built with 'computed gotos'. "
+            "Stepping bytecodes is not supported."
         )
 
 
