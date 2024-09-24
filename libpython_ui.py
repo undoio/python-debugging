@@ -1,118 +1,101 @@
-import subprocess
+import functools
+import os
 
 import gdb
+import pygments
+import pygments.lexers
+import pygments.formatters
+
+import libpython
+import libpython_extensions
+import tui_windows
 
 
-def highlight_python(text):
+def highlight_python(content: bytes) -> bytes:
     """
-    Pipe bytes through the highlight program to add Python syntax highlighting.
+    Applies Python syntax highlighting and prepends line numbers to provided content.
     """
-    if getattr(highlight_python, "failed", False):
-        return text
-    result = subprocess.run(
-        ["highlight", "--syntax=python", "--out-format=ansi"],
-        stdout=subprocess.PIPE,
-        input=text,
-        check=False,
+    return pygments.highlight(
+        content, pygments.lexers.PythonLexer(), pygments.formatters.TerminalFormatter(linenos=True)
     )
-    if result.returncode:
-        print("Failed to provide syntax highlighting for Python.")
-        print("Please install the `highlight` program.")
-        highlight_python.failed = True
-        return text
-    return result.stdout
 
 
-def register_window(name):
+@functools.cache
+def get_highlighted_file_content(filename: str) -> str:
     """
-    Register a TUI window and define a new layout for it.
+    Returns the content of the Python source file with syntax highlighting.
     """
-
-    def decorator(cls):
-        gdb.register_window_type(name, cls)
-        gdb.execute(f"tui new-layout {name} {name} 1 status 1 cmd 1")
-        return cls
-
-    return decorator
+    with libpython_extensions.PythonSubstitutePath.open(os.fsencode(filename), "r") as f:
+        content = f.read()
+    return highlight_python(content)
 
 
-class Window:
-    title: str | None = None
+def get_filename_and_line() -> tuple[str, int]:
+    """
+    Returns the path to the current Python source file and the current line number.
+    """
+    # py-list requires an actual PyEval_EvalFrameEx frame:
+    frame = libpython.Frame.get_selected_bytecode_frame()
+    if not frame:
+        raise gdb.error("Unable to locate gdb frame for python bytecode interpreter")
 
-    def __init__(self, tui_window):
-        self._tui_window = tui_window
-        self._tui_window.title = self.title
-        gdb.events.before_prompt.connect(self.render)
+    pyop = frame.get_pyop()
+    if not pyop or pyop.is_optimized_out():
+        raise gdb.error(libpython.UNABLE_READ_INFO_PYTHON_FRAME)
 
-    def get_lines(self):
-        raise NotImplementedError()
-
-    def render(self):
-        if not self._tui_window.is_valid():
-            return
-
-        # Truncate output
-        lines = self.get_lines()[:self._tui_window.height]
-        lines = (line[:self._tui_window.width - 1] for line in lines)
-
-        output = "\n".join(lines)
-        self._tui_window.write(output, True)
-
-    def close(self):
-        gdb.events.before_prompt.disconnect(self.render)
+    filename = pyop.filename()
+    lineno = pyop.current_line_num()
+    if lineno is None:
+        raise gdb.error("Unable to read python frame line number")
+    return filename, lineno
 
 
-@register_window("python-source")
-class PythonSourceWindow(Window):
+@tui_windows.register_window("python-source")
+class PythonSourceWindow(tui_windows.ScrollableWindow):
     title = "Python Source"
 
-    def get_lines(self):
-        python_source = gdb.execute("py-list", to_string=True).encode("utf-8")
-        return highlight_python(python_source).decode("utf-8").splitlines()
+    def get_content(self):
+        filename, line = get_filename_and_line()
+        lines = get_highlighted_file_content(filename).splitlines()
+        prefixed_lines = [(" > " if i == line else "   ") + l for i, l in enumerate(lines, start=1)]
+
+        # Set vertical scroll offset to center the current line
+        half_window_height = self._tui_window.height // 2
+        self.vscroll_offset = line - half_window_height
+
+        return "\n".join(prefixed_lines)
 
 
-@register_window("python-backtrace")
-class PythonBacktraceWindow(Window):
+@tui_windows.register_window("python-backtrace")
+class PythonBacktraceWindow(tui_windows.ScrollableWindow):
     title = "Python Backtrace"
 
-    def get_lines(self):
-        return gdb.execute("py-bt", to_string=True).splitlines()
+    def get_content(self):
+        return gdb.execute("py-bt", to_string=True)
 
 
-@register_window("python-locals")
-class PythonLocalsWindow(Window):
+@tui_windows.register_window("python-locals")
+class PythonLocalsWindow(tui_windows.ScrollableWindow):
     title = "Local Python Variables"
 
-    def get_lines(self):
-        return gdb.execute("py-locals", to_string=True).splitlines()
+    def get_content(self):
+        return gdb.execute("py-locals", to_string=True)
 
 
-@register_window("python-bytecode")
-class PythonBytecodeWindow(Window):
+@tui_windows.register_window("python-bytecode")
+class PythonBytecodeWindow(tui_windows.ScrollableWindow):
     title = "Python Bytecode"
 
-    def get_lines(self):
+    def get_lines(self) -> list[str]:
         lines = gdb.execute("py-dis", to_string=True).splitlines()
-        total_lines = len(lines)
-        height = self._tui_window.height
-        if total_lines < height:
-            return lines
 
-        current_line = None
-        for index, line in enumerate(lines, 1):
+        # Set vertical scroll offset to center the current line
+        for index, line in enumerate(lines, start=1):
             if "-->" in line:
-                current_line = index
-                break
-        else:
-            return lines[:height]
+                half_window_height = self._tui_window.height // 2
+                self.vscroll_offset = index - half_window_height
 
-        first_half = height // 2
-        second_half = height - first_half
-        if current_line < first_half:
-            return lines[:height]
-        if current_line + second_half > total_lines:
-            return lines[-height:]
-        return lines[current_line - first_half : current_line + second_half]
+        return lines
 
 
 # Define a layout with all Python windows
@@ -120,10 +103,8 @@ gdb.execute(
     " ".join(
         (
             "tui new-layout python",
-            "python-backtrace 2",
-            "{-horizontal python-bytecode 1 python-locals 1} 2",
-            "python-source 2",
-            "status 1 cmd 1",
+            "{-horizontal {python-source 2 status 1 cmd 1} 3",
+            "{python-locals 1 python-backtrace 1 python-bytecode 1 timeline 1} 2} 1",
         )
     )
 )

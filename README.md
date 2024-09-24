@@ -13,6 +13,7 @@ Clone the repository or copy the following files into your current working direc
 - `libpython.py`
 - `libpython_extensions.py`
 - `libpython_ui.py`
+- `tui_windows.py`
 
 and start UDB while sourcing the `libpython.gdb` file from the same directory
 
