@@ -7,7 +7,7 @@ from typing import Optional
 
 import gdb
 from src.udbpy.gdb_extensions import command
-from undodb.debugger_extensions import debugger_utils
+from undo.debugger_extensions import debugger_utils
 
 import libpython
 
